@@ -12,5 +12,7 @@ async fn main() {
 
 #[axum::debug_handler]
 async fn root_get() -> impl IntoResponse {
-    Html(include_str!("index.html"))
+    let markup = tokio::fs::read_to_string("src/index.html").await.unwrap();
+
+    Html(markup)
 }
