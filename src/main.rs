@@ -1,4 +1,4 @@
-use axum::{routing::get, Router, Server};
+use axum::{routing::get, Router, Server, response::{Html, IntoResponse}};
 
 #[tokio::main]
 async fn main() {
@@ -10,6 +10,7 @@ async fn main() {
     server.await.unwrap();
 }
 
-async fn root_get() -> &'static str {
-    "Ring Ring!"
+#[axum::debug_handler]
+async fn root_get() -> impl IntoResponse {
+    Html(include_str!("index.html"))
 }
