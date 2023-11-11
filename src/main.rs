@@ -19,7 +19,7 @@ const RINGING_TIME: u64 = 15;
 async fn main() {
     let router = Router::new()
         .route("/", get(root_get))
-        .route("/index.js", get(indexjs_get))
+        .route("/index.mjs", get(indexmjs_get))
         .route("/index.css", get(indexcss_get))
         .route("/ring", post(ring_post));
     let server = Server::bind(&"0.0.0.0:8989".parse().unwrap()).serve(router.into_make_service());
@@ -37,8 +37,8 @@ async fn root_get() -> impl IntoResponse {
 }
 
 #[axum::debug_handler]
-async fn indexjs_get() -> impl IntoResponse {
-    let javascript = tokio::fs::read_to_string("src/index.js").await.unwrap();
+async fn indexmjs_get() -> impl IntoResponse {
+    let javascript = tokio::fs::read_to_string("src/index.mjs").await.unwrap();
 
     Response::builder()
         .header("content-type", "application/javascript;charset=utf-8")
@@ -59,16 +59,16 @@ async fn indexcss_get() -> impl IntoResponse {
 async fn ring_post() -> impl IntoResponse {
     println!("Bell is ringing");
     let mp3 = File::open("sounds/megalovania.mp3").unwrap();
-    play_audio_file(mp3);
+    play_ringtone(mp3);
 
     StatusCode::OK
 }
 
 /// Play the file 'sound' on the local machine
-fn play_audio_file(sound: File) {
+fn play_ringtone(ringtone: File) {
     thread::spawn(|| {
         let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-        let bufreader = BufReader::new(sound);
+        let bufreader = BufReader::new(ringtone);
         let source = Decoder::new(bufreader).unwrap();
         stream_handle.play_raw(source.convert_samples()).unwrap();
         sleep(Duration::from_secs(RINGING_TIME));
