@@ -1,27 +1,40 @@
+use axum::body::Full;
+use axum::extract::{DefaultBodyLimit, Multipart, Path};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::routing::post;
-use axum::{http::Response, response::{Html, IntoResponse}, routing::get, Router, Server, Json, body};
+use axum::{
+    body,
+    http::Response,
+    response::{Html, IntoResponse},
+    routing::get,
+    Json, Router, Server,
+};
 use rodio::{Decoder, OutputStream, Source};
 use std::fs::File;
-use std::io::{BufReader, Read};
-use std::{fs, thread};
+use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::Duration;
-use axum::body::Full;
-use axum::extract::Path;
+use std::{fs, thread};
 
 const RINGING_TIME: u64 = 15;
 
 #[tokio::main]
 async fn main() {
+    // Initialize folder structure
+    fs::create_dir_all(format!("{}/ringtones/.trash", get_root_path()))
+        .expect("Couldn't create directories");
+
     let router = Router::new()
         .route("/", get(root_get))
         .route("/index.mjs", get(indexmjs_get))
         .route("/index.css", get(indexcss_get))
         .route("/ring", post(ring_post))
-        .route("/api/get_ringtone_list", get(api_get_ringtone_list))
-        .route("/api/get_ringtone/:ringtone", get(api_get_ringtone));
+        .route("/api/ringtone_list", get(api_ringtone_list_get))
+        .route("/api/ringtone/:ringtone", get(api_ringtone_get))
+        .route("/api/upload", post(api_upload_post))
+        .route("/api/remove/:ringtone", post(api_remove_post))
+        .layer(DefaultBodyLimit::max(2_usize.pow(30)));
     let server = Server::bind(&"0.0.0.0:8989".parse().unwrap()).serve(router.into_make_service());
     let addr = server.local_addr();
     println!("Listening on {addr}");
@@ -65,29 +78,45 @@ async fn ring_post() -> impl IntoResponse {
 }
 
 #[axum::debug_handler]
-async fn api_get_ringtone_list() -> impl IntoResponse {
-    let paths = fs::read_dir("ringtones").unwrap();
-    let filenames: Vec<String> = paths.map(|path| path.unwrap().file_name().to_str().unwrap().to_string()).collect();
-    Json(filenames)
-
+async fn api_ringtone_list_get() -> impl IntoResponse {
+    let read_dir_result = fs::read_dir(format!("{}/ringtones", get_root_path()));
+    match read_dir_result {
+        Ok(entries) => {
+            let filenames: Vec<String> = entries
+                .map(|entry| entry.unwrap())
+                .filter(|entry| !entry.path().is_dir())
+                .map(|entry| entry.file_name().to_str().unwrap().to_string())
+                .collect();
+            Json::into_response(Json(filenames))
+        }
+        Err(error) => Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(body::boxed(
+                format!("Couldn't get ringtone list: {}", error).to_owned(),
+            ))
+            .unwrap(),
+    }
 
     // Json(["megalovania.mp3", "Never Gonna Give You Up", "Nyan Cat", "500 Miles"])
 }
 
-async fn api_get_ringtone(Path(ringtone): Path<String>) -> impl IntoResponse {
+async fn api_ringtone_get(Path(ringtone): Path<String>) -> impl IntoResponse {
     let path = ringtone.trim_start_matches('/').to_string();
     println!("Serving ringtones/{}", path);
 
     let cargo_manifest_dir: String = std::env::var("CARGO_MANIFEST_DIR").unwrap();
 
-    let ringtone_path = PathBuf::from(cargo_manifest_dir).join("ringtones").join(path.clone());
+    let ringtone_path = PathBuf::from(cargo_manifest_dir)
+        .join("ringtones")
+        .join(path.clone());
     let ringtone_path: &std::path::Path = &ringtone_path.as_path();
 
     return match ringtone_path.exists() {
         true => {
             let mut file_contents = Vec::new();
             let mut file = File::open(&ringtone_path).expect("Unable to open audio file");
-            file.read_to_end(&mut file_contents).expect("Unable to read audio file");
+            file.read_to_end(&mut file_contents)
+                .expect("Unable to read audio file");
             Response::builder()
                 .status(StatusCode::OK)
                 .header(
@@ -96,16 +125,76 @@ async fn api_get_ringtone(Path(ringtone): Path<String>) -> impl IntoResponse {
                 )
                 .body(body::boxed(Full::from(file_contents)))
                 .unwrap()
-        },
+        }
         false => {
             println!("Requested resource ringtones/{} not found", path);
             Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(body::boxed("Ringtone does not exist.".to_owned()))
                 .unwrap()
-        },
+        }
+    };
+}
+
+async fn api_upload_post(mut multipart: Multipart) -> impl IntoResponse {
+    let cargo_manifest_dir = get_root_path();
+    // let mut filename: Option<String> = Option::None;
+
+    while let Some(field) = multipart.next_field().await.unwrap() {
+        let field_name = field.name().unwrap().to_string();
+        if field_name == "file" {
+            let filename = field.file_name().unwrap().to_string();
+            let data = field.bytes().await.unwrap();
+            println!("File '{}' received with size of {}", filename, data.len());
+            let mut file: File = File::create(
+                PathBuf::from(cargo_manifest_dir.clone())
+                    .join("ringtones")
+                    .join(filename.clone()),
+            )
+            .unwrap();
+            match file.write_all(&data) {
+                Ok(_) => {
+                    println!("File uploaded successfully");
+                }
+                Err(err) => {
+                    eprintln!("{}", err);
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(body::boxed("Failed to save video to disk.".to_owned()))
+                        .unwrap();
+                }
+            };
+            let _ = file.flush();
+            let _ = file.sync_all();
+            break;
+        }
     }
 
+    Response::builder()
+        .status(StatusCode::OK)
+        .body(body::boxed(format!("Video uploaded successfully")))
+        .unwrap()
+}
+
+async fn api_remove_post(Path(ringtone): Path<String>) -> impl IntoResponse {
+    let cargo_manifest_dir = get_root_path();
+    let filename = ringtone.trim_start_matches('/').to_string();
+    println!("Moving {filename} to trash");
+    match fs::rename(
+        format!("{cargo_manifest_dir}/ringtones/{filename}"),
+        format!("{cargo_manifest_dir}/ringtones/.trash/{filename}"),
+    ) {
+        Ok(()) => Response::builder()
+            .status(StatusCode::OK)
+            .body(body::boxed("".to_owned()))
+            .unwrap(),
+        Err(err) => Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(body::boxed(
+                format!("Problem moving the file to trash: {err}").to_owned(),
+            ))
+            .unwrap(),
+    }
 }
 
 /// Play the file 'sound' on the local machine
@@ -117,4 +206,8 @@ fn play_ringtone(ringtone: File) {
         stream_handle.play_raw(source.convert_samples()).unwrap();
         sleep(Duration::from_secs(RINGING_TIME));
     });
+}
+
+fn get_root_path() -> String {
+    std::env::var("CARGO_MANIFEST_DIR").unwrap()
 }
