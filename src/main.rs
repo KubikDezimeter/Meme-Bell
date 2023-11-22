@@ -1,7 +1,7 @@
 use axum::body::Full;
 use axum::extract::{DefaultBodyLimit, Multipart, Path};
 use axum::http::{header, HeaderValue, StatusCode};
-use axum::routing::post;
+use axum::routing::{post, put};
 use axum::{
     body,
     http::Response,
@@ -11,13 +11,17 @@ use axum::{
 };
 use rodio::{Decoder, OutputStream, Source};
 use std::fs::File;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::Duration;
 use std::{fs, thread};
+use serde::{Deserialize, Serialize};
 
-const RINGING_TIME: u64 = 15;
+#[derive(Serialize,Deserialize)]
+struct Settings {
+    ringing_time: usize,
+}
 
 #[tokio::main]
 async fn main() {
@@ -29,11 +33,13 @@ async fn main() {
         .route("/", get(root_get))
         .route("/index.mjs", get(indexmjs_get))
         .route("/index.css", get(indexcss_get))
-        .route("/ring", post(ring_post))
+        .route("/api/ring", post(ring_post))
         .route("/api/ringtone_list", get(api_ringtone_list_get))
         .route("/api/ringtone/:ringtone", get(api_ringtone_get))
         .route("/api/upload", post(api_upload_post))
         .route("/api/remove/:ringtone", post(api_remove_post))
+        .route("/api/settings/ringing_time", get(api_setting_ringing_time_get))
+        .route("/api/settings/ringing_time", put(api_setting_ringing_time_put))
         .layer(DefaultBodyLimit::max(2_usize.pow(30)));
     let server = Server::bind(&"0.0.0.0:8989".parse().unwrap()).serve(router.into_make_service());
     let addr = server.local_addr();
@@ -100,6 +106,7 @@ async fn api_ringtone_list_get() -> impl IntoResponse {
     // Json(["megalovania.mp3", "Never Gonna Give You Up", "Nyan Cat", "500 Miles"])
 }
 
+#[axum::debug_handler]
 async fn api_ringtone_get(Path(ringtone): Path<String>) -> impl IntoResponse {
     let path = ringtone.trim_start_matches('/').to_string();
     println!("Serving ringtones/{}", path);
@@ -136,6 +143,7 @@ async fn api_ringtone_get(Path(ringtone): Path<String>) -> impl IntoResponse {
     };
 }
 
+#[axum::debug_handler]
 async fn api_upload_post(mut multipart: Multipart) -> impl IntoResponse {
     let cargo_manifest_dir = get_root_path();
     // let mut filename: Option<String> = Option::None;
@@ -176,6 +184,7 @@ async fn api_upload_post(mut multipart: Multipart) -> impl IntoResponse {
         .unwrap()
 }
 
+#[axum::debug_handler]
 async fn api_remove_post(Path(ringtone): Path<String>) -> impl IntoResponse {
     let cargo_manifest_dir = get_root_path();
     let filename = ringtone.trim_start_matches('/').to_string();
@@ -197,6 +206,32 @@ async fn api_remove_post(Path(ringtone): Path<String>) -> impl IntoResponse {
     }
 }
 
+#[axum::debug_handler]
+async fn api_setting_ringing_time_get() -> impl IntoResponse {
+    return Response::builder()
+        .status(StatusCode::OK)
+        .body(body::boxed(get_ringing_time().to_string()))
+        .unwrap()
+}
+
+#[axum::debug_handler]
+async fn api_setting_ringing_time_put(body: String) -> impl IntoResponse {
+    let ringing_time_result = body.trim().parse::<usize>();
+    match ringing_time_result {
+        Ok(ringing_time) => {
+            set_ringing_time(ringing_time);
+            Response::builder()
+                .status(StatusCode::OK)
+                .body(body::boxed("".to_owned()))
+                .unwrap()
+        }
+        Err(error) => Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(body::boxed(format!("Couldn't parse request body as number: {error}").to_owned()))
+            .unwrap()
+    }
+}
+
 /// Play the file 'sound' on the local machine
 fn play_ringtone(ringtone: File) {
     thread::spawn(|| {
@@ -204,10 +239,24 @@ fn play_ringtone(ringtone: File) {
         let bufreader = BufReader::new(ringtone);
         let source = Decoder::new(bufreader).unwrap();
         stream_handle.play_raw(source.convert_samples()).unwrap();
-        sleep(Duration::from_secs(RINGING_TIME));
+        sleep(Duration::from_secs(get_ringing_time() as u64));
     });
 }
 
 fn get_root_path() -> String {
     std::env::var("CARGO_MANIFEST_DIR").unwrap()
+}
+
+fn get_ringing_time() -> usize {
+    let file = File::open("settings.json").expect("Couldn't open file");
+    let bufreader = BufReader::new(file);
+    let setting: Settings = serde_json::from_reader(bufreader).expect("Couldn't read settings from file");
+    setting.ringing_time
+}
+
+fn set_ringing_time(ringing_time: usize) {
+    let settings = Settings { ringing_time };
+    let file = File::create("settings.json").expect("Unable to create settings file");
+    let bufwriter = BufWriter::new(file);
+    serde_json::to_writer_pretty(bufwriter, &settings).expect("Failed writing");
 }

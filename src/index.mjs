@@ -19,14 +19,14 @@ function RingtoneList() {
     return html`
     <table>
         <tr>
-            <th>Klingelton aktiv</th>
+<!--            <th>Klingelton aktiv</th>-->
             <th>Name</th>
             <th></th>
             <th></th>
         </tr>
         ${ringtoneList.value.map((ringtone) => html`
         <tr key="${ringtone}">
-            <td><input type="checkbox" name="${ringtone}" /></td>
+<!--            <td><input type="checkbox" name="${ringtone}" /></td>-->
             <td>${ringtone}</td>
             <td><audio controls><source src="/api/ringtone/${ringtone}" type="audio/mpeg" />Your browser does not support the audio element.</audio></td>
             <td><${RemoveButton} ringtone="${ringtone}" /></td>
@@ -106,11 +106,44 @@ function RemoveButton(props) {
     return html`<button type="button" onclick=${handleRemove}>Entfernen</button>`;
 }
 
+function Settings() {
+    return html`
+        <${RingingTimeSetting} />
+    `;
+}
+
+function RingingTimeSetting() {
+    const [ringingTime, setRingingTime] = useState();
+    useEffect(async () => {
+        let value = await fetch("/api/settings/ringing_time")
+            .then((response) => response.json());
+        setRingingTime(value);
+    }, []);
+
+    const handleChange = async () => {
+        let ringingTime = document.getElementById("ringingTime").value;
+        try {
+            const result = await fetch("/api/settings/ringing_time", {
+                method: "PUT",
+                body: ringingTime
+            });
+        } catch (error) {
+            console.error(error);
+        }
+    }
+
+    return html`
+        <label for="ringingTime">Klingeldauer in Sekunden: </label>
+        <input type="number" id="ringingTime" min="1" value=${ringingTime} oninput=${handleChange} />
+    `;
+}
+
 function App () {
     return html`
         <h1>Meme Klingel</h1>
         <${RingtoneList} />
         <${RingtoneUploader} />
+        <${Settings} />
     `;
 }
 
