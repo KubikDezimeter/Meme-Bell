@@ -73,7 +73,7 @@ function RingtoneUploader() {
             <label htmlFor="file" className="sr-only">
                 MP3 auswählen:
             </label>
-            <input id="file" type="file" onChange=${handleFileChange} />
+            <input id="file" type="file" accept=".mp3" onChange=${handleFileChange} />
         </div>
         ${file && (html`
         <section>
