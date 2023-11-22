@@ -59,8 +59,8 @@ function RingtoneUploader() {
 
                 await result;
                 ringtoneList.value = [...ringtoneList.value, file.name];
-                console.log(ringtoneList.value);
-
+                setFile();
+                document.getElementById("file").value = "";
             } catch (error) {
                 console.error(error);
             }
@@ -68,24 +68,25 @@ function RingtoneUploader() {
     };
 
     return html`
-    <div>
-        <label htmlFor="file" className="sr-only">
-            Choose a file
-        </label>
-        <input id="file" type="file" onChange=${handleFileChange} />
-    </div>
-    ${file && (html`
-    <section>
-        File details:
-        <ul>
-            <li>Name: ${file.name}</li>
-            <li>Type: ${file.type}</li>
-            <li>Size: ${file.size} bytes</li>
-        </ul>
-    </section>
+        <div class="upload">
+        <div>
+            <label htmlFor="file" className="sr-only">
+                MP3 auswählen:
+            </label>
+            <input id="file" type="file" onChange=${handleFileChange} />
+        </div>
+        ${file && (html`
+        <section>
+            Ausgewählte Datei:
+            <ul>
+                <li>Name: ${file.name}</li>
+                <li>Größe: ${Math.round(file.size / (10**3))} kB</li>
+            </ul>
+        </section>
     `)}
 
-    ${file && html`<button onClick=${handleUpload}>Upload a file</button>`}`;
+    ${file && html`<button onClick=${handleUpload}>Upload</button>`}
+    </div>`;
 }
 
 function RemoveButton(props) {
@@ -108,7 +109,9 @@ function RemoveButton(props) {
 
 function Settings() {
     return html`
+        <div class="settings">
         <${RingingTimeSetting} />
+        </div>
     `;
 }
 

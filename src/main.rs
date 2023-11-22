@@ -11,7 +11,7 @@ use axum::{
 };
 use rodio::{Decoder, OutputStream, Source};
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::Duration;
@@ -77,7 +77,11 @@ async fn indexcss_get() -> impl IntoResponse {
 
 async fn ring_post() -> impl IntoResponse {
     println!("Bell is ringing");
-    let mp3 = File::open("ringtones/megalovania.mp3").unwrap();
+    let ringtone_list = get_ringtone_list();
+    let rand_index = fastrand::usize(..ringtone_list.len());
+    let ringtone = &ringtone_list[rand_index];
+    let mp3 = File::open(format!("ringtones/{ringtone}")).unwrap();
+    println!("Playing 'ringtones/{ringtone}'");
     play_ringtone(mp3);
 
     StatusCode::OK
@@ -85,25 +89,7 @@ async fn ring_post() -> impl IntoResponse {
 
 #[axum::debug_handler]
 async fn api_ringtone_list_get() -> impl IntoResponse {
-    let read_dir_result = fs::read_dir(format!("{}/ringtones", get_root_path()));
-    match read_dir_result {
-        Ok(entries) => {
-            let filenames: Vec<String> = entries
-                .map(|entry| entry.unwrap())
-                .filter(|entry| !entry.path().is_dir())
-                .map(|entry| entry.file_name().to_str().unwrap().to_string())
-                .collect();
-            Json::into_response(Json(filenames))
-        }
-        Err(error) => Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(body::boxed(
-                format!("Couldn't get ringtone list: {}", error).to_owned(),
-            ))
-            .unwrap(),
-    }
-
-    // Json(["megalovania.mp3", "Never Gonna Give You Up", "Nyan Cat", "500 Miles"])
+    Json::into_response(Json(get_ringtone_list()))
 }
 
 #[axum::debug_handler]
@@ -243,12 +229,31 @@ fn play_ringtone(ringtone: File) {
     });
 }
 
+fn get_ringtone_list() -> Vec<String> {
+    let entries = fs::read_dir(format!("{}/ringtones", get_root_path())).expect("Encountered an error while reading the 'ringtones' folder");
+    let filenames: Vec<String> = entries
+        .map(|entry| entry.unwrap())
+        .filter(|entry| !entry.path().is_dir())
+        .map(|entry| entry.file_name().to_str().unwrap().to_string())
+        .collect();
+    filenames
+}
+
 fn get_root_path() -> String {
     std::env::var("CARGO_MANIFEST_DIR").unwrap()
 }
 
 fn get_ringing_time() -> usize {
-    let file = File::open("settings.json").expect("Couldn't open file");
+    let file = match File::open("settings.json") {
+        Ok(file) => file,
+        Err(error) => match error.kind() {
+            ErrorKind::NotFound => {
+                set_ringing_time(5);
+                File::open("settings.json").expect("Failed to initialize settings.json")
+            },
+            other_error => panic!("Couldn't create a settings file: {:?}", other_error),
+        },
+    };
     let bufreader = BufReader::new(file);
     let setting: Settings = serde_json::from_reader(bufreader).expect("Couldn't read settings from file");
     setting.ringing_time
