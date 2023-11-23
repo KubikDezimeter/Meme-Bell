@@ -10,18 +10,20 @@ use axum::{
     Json, Router, Server,
 };
 use rodio::{Decoder, OutputStream, Source};
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::Duration;
 use std::{fs, thread};
-use serde::{Deserialize, Serialize};
 
-#[derive(Serialize,Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct Settings {
     ringing_time: usize,
 }
+
+static mut LAST_RINGTONE: usize = 0;
 
 #[tokio::main]
 async fn main() {
@@ -78,11 +80,21 @@ async fn indexcss_get() -> impl IntoResponse {
 async fn ring_post() -> impl IntoResponse {
     println!("Bell is ringing");
     let ringtone_list = get_ringtone_list();
-    let rand_index = fastrand::usize(..ringtone_list.len());
+    let mut rand_index = fastrand::usize(..ringtone_list.len());
+    unsafe {
+        while rand_index == LAST_RINGTONE && ringtone_list.len() > 1 {
+            rand_index = fastrand::usize(..ringtone_list.len());
+            // println!("Rerolling ringtone");
+        }
+        // println!("rand_index: {rand_index}, LAST_RINGTONE: {LAST_RINGTONE}");
+    }
     let ringtone = &ringtone_list[rand_index];
     let mp3 = File::open(format!("ringtones/{ringtone}")).unwrap();
     println!("Playing 'ringtones/{ringtone}'");
     play_ringtone(mp3);
+    unsafe {
+        LAST_RINGTONE = rand_index;
+    }
 
     StatusCode::OK
 }
@@ -197,7 +209,7 @@ async fn api_setting_ringing_time_get() -> impl IntoResponse {
     return Response::builder()
         .status(StatusCode::OK)
         .body(body::boxed(get_ringing_time().to_string()))
-        .unwrap()
+        .unwrap();
 }
 
 #[axum::debug_handler]
@@ -213,8 +225,10 @@ async fn api_setting_ringing_time_put(body: String) -> impl IntoResponse {
         }
         Err(error) => Response::builder()
             .status(StatusCode::BAD_REQUEST)
-            .body(body::boxed(format!("Couldn't parse request body as number: {error}").to_owned()))
-            .unwrap()
+            .body(body::boxed(
+                format!("Couldn't parse request body as number: {error}").to_owned(),
+            ))
+            .unwrap(),
     }
 }
 
@@ -230,7 +244,8 @@ fn play_ringtone(ringtone: File) {
 }
 
 fn get_ringtone_list() -> Vec<String> {
-    let entries = fs::read_dir(format!("{}/ringtones", get_root_path())).expect("Encountered an error while reading the 'ringtones' folder");
+    let entries = fs::read_dir(format!("{}/ringtones", get_root_path()))
+        .expect("Encountered an error while reading the 'ringtones' folder");
     let filenames: Vec<String> = entries
         .map(|entry| entry.unwrap())
         .filter(|entry| !entry.path().is_dir())
@@ -250,12 +265,13 @@ fn get_ringing_time() -> usize {
             ErrorKind::NotFound => {
                 set_ringing_time(5);
                 File::open("settings.json").expect("Failed to initialize settings.json")
-            },
+            }
             other_error => panic!("Couldn't create a settings file: {:?}", other_error),
         },
     };
     let bufreader = BufReader::new(file);
-    let setting: Settings = serde_json::from_reader(bufreader).expect("Couldn't read settings from file");
+    let setting: Settings =
+        serde_json::from_reader(bufreader).expect("Couldn't read settings from file");
     setting.ringing_time
 }
 
