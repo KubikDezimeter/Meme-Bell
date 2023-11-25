@@ -7,7 +7,8 @@ use axum::{
     http::Response,
     response::{Html, IntoResponse},
     routing::get,
-    Json, Router, Server,
+    Router,
+    Server,
 };
 use reqwest::header::AUTHORIZATION;
 use rodio::{Decoder, OutputStream, Source};
@@ -20,11 +21,21 @@ use std::thread::sleep;
 use std::time::Duration;
 use std::{fs, thread};
 use std::string::ToString;
+use std::sync::Mutex;
+use lazy_static::lazy_static;
+use axum::Json;
 
 #[derive(Serialize, Deserialize)]
 struct Settings {
     ringing_time: usize,
     discord_user_ids: Vec<String>,
+}
+#[derive(Serialize, Deserialize)]
+struct RingtoneStatus {
+  status: String,
+}
+lazy_static! {
+  static ref RINGTONES_STATUS: Mutex<HashMap<String, RingtoneStatus>> = Mutex::new(HashMap::new());
 }
 
 static mut LAST_RINGTONE: usize = 0;
@@ -39,6 +50,7 @@ async fn main() {
         .route("/", get(root_get))
         .route("/index.mjs", get(indexmjs_get))
         .route("/index.css", get(indexcss_get))
+        .route("/api/status/:ringtone", post(api_ringtone_status_post))
         .route("/api/ring", post(ring_post))
         .route("/api/ringtone_list", get(api_ringtone_list_get))
         .route("/api/ringtone/:ringtone", get(api_ringtone_get))
@@ -85,6 +97,12 @@ async fn indexcss_get() -> impl IntoResponse {
         .header("content-type", "text/css;charset=utf-8")
         .body(css)
         .unwrap()
+}
+#[axum::debug_handler]
+async fn api_ringtone_status_post(Path(ringtone): Path<String>, Json(status): Json<RingtoneStatus>) -> impl IntoResponse {
+    use crate::RINGTONES_STATUS;
+    RINGTONES_STATUS.lock().unwrap().insert(ringtone, status);
+    StatusCode::OK
 }
 
 async fn ring_post() -> impl IntoResponse {
@@ -255,9 +273,14 @@ fn play_ringtone(ringtone: File) {
 fn get_ringtone_list() -> Vec<String> {
     let entries = fs::read_dir(format!("{}/ringtones", get_root_path()))
         .expect("Encountered an error while reading the 'ringtones' folder");
+
     let filenames: Vec<String> = entries
         .map(|entry| entry.unwrap())
-        .filter(|entry| !entry.path().is_dir())
+        .filter(|entry| {
+            !entry.path().is_dir()
+                && RINGTONES_STATUS.lock().unwrap().get(entry.file_name().to_str().unwrap())
+                    .map_or(false, |status| status.status == "aktiv")
+        })
         .map(|entry| entry.file_name().to_str().unwrap().to_string())
         .collect();
     filenames
