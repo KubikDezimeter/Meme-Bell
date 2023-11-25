@@ -58,17 +58,30 @@ function RingtoneList() {
 }
 function toggleStatus(event) {
     const statusContainer = event.target.closest('.status_container');
+    let ringtoneName;
     if (statusContainer) {
+        const nameContainer = event.target.closest('tr').querySelector('.name_container');
+        if (nameContainer) {
+            ringtoneName = nameContainer.textContent.trim();
+        }
         const statusElement = statusContainer.querySelector('.status');
-        if (statusElement) {
+        if (statusElement && ringtoneName) {
             if (statusElement.classList.contains('aktiv')) {
                 statusElement.textContent = 'passiv';
                 statusElement.classList.remove('aktiv');
                 statusElement.classList.add('passiv');
+                fetch(`/api/status/${ringtoneName}`, {
+                    method: 'POST',
+                    body: JSON.stringify({ status: "passiv" })
+                });
             } else {
                 statusElement.textContent = 'aktiv';
                 statusElement.classList.remove('passiv');
                 statusElement.classList.add('aktiv');
+                fetch(`/api/status/${ringtoneName}`, {
+                    method: 'POST',
+                    body: JSON.stringify({ status: "aktiv" })
+                });
             }
         }
     }
