@@ -9,18 +9,22 @@ use axum::{
     routing::get,
     Json, Router, Server,
 };
+use reqwest::header::AUTHORIZATION;
 use rodio::{Decoder, OutputStream, Source};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::Duration;
 use std::{fs, thread};
+use std::string::ToString;
 
 #[derive(Serialize, Deserialize)]
 struct Settings {
     ringing_time: usize,
+    discord_user_ids: Vec<String>,
 }
 
 static mut LAST_RINGTONE: usize = 0;
@@ -40,8 +44,14 @@ async fn main() {
         .route("/api/ringtone/:ringtone", get(api_ringtone_get))
         .route("/api/upload", post(api_upload_post))
         .route("/api/remove/:ringtone", post(api_remove_post))
-        .route("/api/settings/ringing_time", get(api_setting_ringing_time_get))
-        .route("/api/settings/ringing_time", put(api_setting_ringing_time_put))
+        .route(
+            "/api/settings/ringing_time",
+            get(api_setting_ringing_time_get),
+        )
+        .route(
+            "/api/settings/ringing_time",
+            put(api_setting_ringing_time_put),
+        )
         .layer(DefaultBodyLimit::max(2_usize.pow(30)));
     let server = Server::bind(&"0.0.0.0:8989".parse().unwrap()).serve(router.into_make_service());
     let addr = server.local_addr();
@@ -84,9 +94,7 @@ async fn ring_post() -> impl IntoResponse {
     unsafe {
         while rand_index == LAST_RINGTONE && ringtone_list.len() > 1 {
             rand_index = fastrand::usize(..ringtone_list.len());
-            // println!("Rerolling ringtone");
         }
-        // println!("rand_index: {rand_index}, LAST_RINGTONE: {LAST_RINGTONE}");
     }
     let ringtone = &ringtone_list[rand_index];
     let mp3 = File::open(format!("ringtones/{ringtone}")).unwrap();
@@ -95,6 +103,7 @@ async fn ring_post() -> impl IntoResponse {
     unsafe {
         LAST_RINGTONE = rand_index;
     }
+    send_discord_notifications().await;
 
     StatusCode::OK
 }
@@ -208,7 +217,7 @@ async fn api_remove_post(Path(ringtone): Path<String>) -> impl IntoResponse {
 async fn api_setting_ringing_time_get() -> impl IntoResponse {
     return Response::builder()
         .status(StatusCode::OK)
-        .body(body::boxed(get_ringing_time().to_string()))
+        .body(body::boxed(get_settings().ringing_time.to_string()))
         .unwrap();
 }
 
@@ -239,7 +248,7 @@ fn play_ringtone(ringtone: File) {
         let bufreader = BufReader::new(ringtone);
         let source = Decoder::new(bufreader).unwrap();
         stream_handle.play_raw(source.convert_samples()).unwrap();
-        sleep(Duration::from_secs(get_ringing_time() as u64));
+        sleep(Duration::from_secs(get_settings().ringing_time as u64));
     });
 }
 
@@ -258,26 +267,95 @@ fn get_root_path() -> String {
     std::env::var("CARGO_MANIFEST_DIR").unwrap()
 }
 
-fn get_ringing_time() -> usize {
+fn get_settings() -> Settings {
     let file = match File::open("settings.json") {
         Ok(file) => file,
         Err(error) => match error.kind() {
             ErrorKind::NotFound => {
-                set_ringing_time(5);
+                set_settings(Settings {
+                    ringing_time: 5,
+                    discord_user_ids: Vec::new(),
+                });
                 File::open("settings.json").expect("Failed to initialize settings.json")
             }
             other_error => panic!("Couldn't create a settings file: {:?}", other_error),
         },
     };
     let bufreader = BufReader::new(file);
-    let setting: Settings =
+    let settings: Settings =
         serde_json::from_reader(bufreader).expect("Couldn't read settings from file");
-    setting.ringing_time
+    settings
 }
 
-fn set_ringing_time(ringing_time: usize) {
-    let settings = Settings { ringing_time };
+fn set_settings(settings: Settings) {
     let file = File::create("settings.json").expect("Unable to create settings file");
     let bufwriter = BufWriter::new(file);
     serde_json::to_writer_pretty(bufwriter, &settings).expect("Failed writing");
+}
+
+fn set_ringing_time(ringing_time: usize) {
+    let mut settings = get_settings();
+    settings.ringing_time = ringing_time;
+    set_settings(settings);
+}
+
+fn set_discord_user_ids(user_ids: Vec<String>) {
+    let mut settings = get_settings();
+    settings.discord_user_ids = user_ids;
+    set_settings(settings);
+}
+
+async fn send_discord_notifications() {
+    let discord_messages: Vec<&str> = vec!["Ding Dong", "Palim Palim", "Let me in", "Macht hoch die Tür", "Ring Ring", "🔔️"];
+
+    let api_token = std::env::var("DISCORD_API_TOKEN").expect("Environment variable \"DISCORD_API_TOKEN\" is not set");
+    let user_ids = get_settings().discord_user_ids;
+
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .user_agent("DiscordBot (https://github.com/KubikDezimeter/meme-bell, 0.1.0)")
+        .build()
+        .expect("TLS backend couldn't be initialized");
+
+    for id in user_ids {
+        let mut body = HashMap::new();
+        body.insert("recipient_id", id.clone());
+
+        let resp = client
+            .post("https://discord.com/api/v10/users/@me/channels")
+            .header(AUTHORIZATION, format!("Bot {api_token}"))
+            .json(&body)
+            .send()
+            .await
+            .expect("Failed to send API request");
+
+        if resp.status() != StatusCode::OK {
+            eprintln!("API request wasn't successful (Status Code {}):", resp.status().as_str());
+            eprintln!("{}", resp.text().await.unwrap());
+            return;
+        }
+
+        let json: Result<serenity::model::channel::PrivateChannel, _> = resp.json().await;
+        let dm_channel = json.unwrap();
+
+        let rand_index = fastrand::usize(..discord_messages.len());
+        let mut message_json = HashMap::new();
+        message_json.insert("content", discord_messages[rand_index]);
+
+        let resp = client
+            .post(format!("https://discord.com/api/v10/channels/{}/messages", dm_channel.id))
+            .header(AUTHORIZATION, format!("Bot {api_token}"))
+            .json(&message_json)
+            .send()
+            .await
+            .expect("Failed to send API request");
+
+        if resp.status() != StatusCode::OK {
+            eprintln!("API request wasn't successful (Status Code {}):", resp.status().as_str());
+            eprintln!("{}", resp.text().await.unwrap());
+            return;
+        } else {
+            println!("Sent discord message to {}", id);
+        }
+    }
 }
