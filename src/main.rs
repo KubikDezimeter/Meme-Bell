@@ -7,7 +7,8 @@ use axum::{
     http::Response,
     response::{Html, IntoResponse},
     routing::get,
-    Json, Router, Server,
+    Router,
+    Server,
 };
 use reqwest::header::AUTHORIZATION;
 use rodio::{Decoder, OutputStream, Source};
@@ -99,7 +100,8 @@ async fn indexcss_get() -> impl IntoResponse {
 }
 #[axum::debug_handler]
 async fn api_ringtone_status_post(Path(ringtone): Path<String>, Json(status): Json<RingtoneStatus>) -> impl IntoResponse {
-    RINGTONES_STATUS.lock().unwrap().insert(ringtone, status.status.to_string());
+    use crate::RINGTONES_STATUS;
+    RINGTONES_STATUS.lock().unwrap().insert(ringtone, status);
     StatusCode::OK
 }
 
@@ -275,7 +277,9 @@ fn get_ringtone_list() -> Vec<String> {
     let filenames: Vec<String> = entries
         .map(|entry| entry.unwrap())
         .filter(|entry| {
-            !entry.path().is_dir() && RINGTONES_STATUS.lock().unwrap().get(entry.file_name().to_str().unwrap()).map_or(false, |status| status == "aktiv")
+            !entry.path().is_dir()
+                && RINGTONES_STATUS.lock().unwrap().get(entry.file_name().to_str().unwrap())
+                    .map_or(false, |status| status.status == "aktiv")
         })
         .map(|entry| entry.file_name().to_str().unwrap().to_string())
         .collect();

@@ -989,6 +989,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "fastrand",
+ "lazy_static",
  "reqwest",
  "rodio",
  "serde",
